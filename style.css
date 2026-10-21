@@ -93,4 +93,6 @@ button {
   color: var(--danger);
 }
 
+#status { color: var(--danger); margin: 0 0 12px; }
+
 #empty { color: var(--muted); text-align: center; margin-top: 32px; }

@@ -1,50 +1,87 @@
-const STORAGE_KEY = 'shopping-list';
+const SUPABASE_URL = 'https://fbeaolgabhcykqcpsqcn.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_BPLytNFG-ralnRGYkEsLKg_58gD9pb8';
+const TABLE = 'shopping_list';
+const LEGACY_STORAGE_KEY = 'shopping-list';
 
-// 순수 함수: 상태 변환
-function addItem(items, text) {
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// 저장소: Supabase shopping_list 테이블
+async function fetchItems() {
+  const { data, error } = await db.from(TABLE).select('*').order('created_at').order('id');
+  if (error) throw error;
+  return data;
+}
+
+async function insertItem(text) {
   const trimmed = text.trim();
-  if (!trimmed) return items;
-  return [...items, { id: Date.now() + Math.random(), text: trimmed, done: false }];
+  if (!trimmed) return;
+  const { error } = await db.from(TABLE).insert({ text: trimmed });
+  if (error) throw error;
 }
 
-function toggleItem(items, id) {
-  return items.map((it) => (it.id === id ? { ...it, done: !it.done } : it));
+async function setDone(id, done) {
+  const { error } = await db.from(TABLE).update({ done }).eq('id', id);
+  if (error) throw error;
 }
 
-function removeItem(items, id) {
-  return items.filter((it) => it.id !== id);
+async function deleteItem(id) {
+  const { error } = await db.from(TABLE).delete().eq('id', id);
+  if (error) throw error;
 }
 
-// 저장소: 읽기/쓰기 실패 시 빈 리스트로 동작
-function load() {
+// 기존 localStorage 데이터를 한 번만 DB로 이전
+async function migrateLegacy() {
+  let legacy;
   try {
-    const data = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    return Array.isArray(data) ? data : [];
+    legacy = JSON.parse(localStorage.getItem(LEGACY_STORAGE_KEY));
   } catch {
-    return [];
+    return;
   }
-}
+  if (!Array.isArray(legacy) || legacy.length === 0) return;
 
-function save(items) {
+  const rows = legacy
+    .filter((it) => it && typeof it.text === 'string' && it.text.trim())
+    .map((it) => ({ text: it.text.trim(), done: Boolean(it.done) }));
+  if (rows.length > 0) {
+    const { error } = await db.from(TABLE).insert(rows);
+    if (error) throw error;
+  }
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+    localStorage.removeItem(LEGACY_STORAGE_KEY);
   } catch {
-    // 저장 불가 환경: 이번 세션에서만 유지
+    // 삭제 불가 환경: 무시
   }
 }
 
 // UI
-let items = load();
+let items = [];
 
 const form = document.getElementById('add-form');
 const input = document.getElementById('add-input');
 const list = document.getElementById('list');
 const empty = document.getElementById('empty');
+const status = document.getElementById('status');
 
-function update(next) {
-  items = next;
-  save(items);
+function showError(message) {
+  status.textContent = message;
+  status.hidden = false;
+}
+
+async function refresh() {
+  items = await fetchItems();
+  status.hidden = true;
   render();
+}
+
+// DB 작업 실행 후 목록을 다시 불러온다. 실패하면 화면에 알린다.
+async function run(action) {
+  try {
+    await action();
+    await refresh();
+  } catch (err) {
+    console.error(err);
+    showError('서버와 통신하지 못했어요. 잠시 후 다시 시도해 주세요.');
+  }
 }
 
 function render() {
@@ -57,14 +94,14 @@ function render() {
     text.type = 'button';
     text.className = 'text';
     text.textContent = it.text;
-    text.addEventListener('click', () => update(toggleItem(items, it.id)));
+    text.addEventListener('click', () => run(() => setDone(it.id, !it.done)));
 
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'del';
     del.textContent = '✕';
     del.setAttribute('aria-label', `${it.text} 삭제`);
-    del.addEventListener('click', () => update(removeItem(items, it.id)));
+    del.addEventListener('click', () => run(() => deleteItem(it.id)));
 
     li.append(text, del);
     list.append(li);
@@ -74,9 +111,10 @@ function render() {
 
 form.addEventListener('submit', (e) => {
   e.preventDefault();
-  update(addItem(items, input.value));
+  const value = input.value;
   input.value = '';
   input.focus();
+  run(() => insertItem(value));
 });
 
-render();
+run(migrateLegacy);
